@@ -4,64 +4,66 @@ pipeline {
 
     options {
         disableConcurrentBuilds()
-        timeout(time: 40, unit: 'MINUTES')
+        timeout(time: 50, unit: 'MINUTES')
     }
 
     environment {
         FRONTEND_IMAGE = 'prasad1112004/logitrack-frontend'
         BACKEND_IMAGE  = 'prasad1112004/logitrack-backend'
-
-        FRONTEND_TAG = 'v3'
-        BACKEND_TAG  = 'v3'
-
         DOCKER_BUILDKIT = '1'
     }
 
     stages {
 
-        stage('Checkout Verification') {
+        stage('Initialize') {
             steps {
-                checkout scm
-                echo 'GitHub repository checked out successfully.'
+                script {
+                    env.IMAGE_TAG = "build-${env.BUILD_NUMBER}"
+                }
+                echo "Building images with tag: ${IMAGE_TAG}"
             }
         }
 
-        stage('Verify Project Structure') {
+        stage('Checkout and Verify') {
             steps {
+                checkout scm
+
                 sh '''
+                    set -e
                     test -f smart-logistics/frontend/package.json
                     test -f smart-logistics/backend/package.json
                     test -f smart-logistics/frontend/Dockerfile
                     test -f smart-logistics/backend/Dockerfile
+                    test -f /etc/logitrack/backend.env
 
-                    echo "All required project files found."
+                    echo "Project and deployment files verified."
                 '''
             }
         }
 
-        stage('Build Frontend Image') {
+        stage('Build Frontend') {
             steps {
                 sh '''
                     docker build \
-                      -t ${FRONTEND_IMAGE}:${FRONTEND_TAG} \
+                      -t ${FRONTEND_IMAGE}:${IMAGE_TAG} \
                       -f smart-logistics/frontend/Dockerfile \
                       smart-logistics/frontend
                 '''
             }
         }
 
-        stage('Build Backend Image') {
+        stage('Build Backend') {
             steps {
                 sh '''
                     docker build \
-                      -t ${BACKEND_IMAGE}:${BACKEND_TAG} \
+                      -t ${BACKEND_IMAGE}:${IMAGE_TAG} \
                       -f smart-logistics/backend/Dockerfile \
                       smart-logistics/backend
                 '''
             }
         }
 
-        stage('Push Images to Docker Hub') {
+        stage('Push to Docker Hub') {
             steps {
                 withCredentials([
                     usernamePassword(
@@ -74,29 +76,174 @@ pipeline {
                         set +x
                         set -e
 
-                        trap 'docker logout >/dev/null 2>&1 || true' EXIT
-
                         echo "$DH_TOKEN" | docker login \
-                            --username "$DH_USERNAME" \
-                            --password-stdin
+                          --username "$DH_USERNAME" \
+                          --password-stdin
 
-                        docker push ${FRONTEND_IMAGE}:${FRONTEND_TAG}
-                        docker push ${BACKEND_IMAGE}:${BACKEND_TAG}
+                        docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
+                        docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
 
-                        echo "Both images pushed successfully."
+                        docker logout
                     '''
                 }
+            }
+        }
+
+        stage('Test Backend Image') {
+            steps {
+                sh '''
+                    set -e
+
+                    CANDIDATE="logitrack-backend-test-${BUILD_NUMBER}"
+
+                    docker rm -f "$CANDIDATE" 2>/dev/null || true
+
+                    docker run -d \
+                      --name "$CANDIDATE" \
+                      --env-file /etc/logitrack/backend.env \
+                      -p 127.0.0.1:15001:5000 \
+                      ${BACKEND_IMAGE}:${IMAGE_TAG}
+
+                    for i in $(seq 1 20); do
+                        if curl -fsS http://127.0.0.1:15001/api/health; then
+                            echo "Candidate backend passed health check."
+                            docker rm -f "$CANDIDATE"
+                            exit 0
+                        fi
+                        sleep 3
+                    done
+
+                    docker logs "$CANDIDATE" || true
+                    docker rm -f "$CANDIDATE" || true
+
+                    echo "Backend candidate failed."
+                    exit 1
+                '''
+            }
+        }
+
+        stage('Deploy Backend') {
+            steps {
+                sh '''
+                    set -eu
+
+                    OLD="logitrack-backend-rollback-${BUILD_NUMBER}"
+                    docker rm -f "$OLD" 2>/dev/null || true
+
+                    docker rename logitrack-backend "$OLD"
+                    docker stop "$OLD"
+
+                    if ! docker run -d \
+                        --name logitrack-backend \
+                        --env-file /etc/logitrack/backend.env \
+                        -p 5000:5000 \
+                        --restart unless-stopped \
+                        ${BACKEND_IMAGE}:${IMAGE_TAG}; then
+
+                        docker rename "$OLD" logitrack-backend
+                        docker start logitrack-backend
+                        exit 1
+                    fi
+
+                    HEALTHY=0
+
+                    for i in $(seq 1 20); do
+                        if curl -fsS http://127.0.0.1:5000/api/health; then
+                            HEALTHY=1
+                            break
+                        fi
+                        sleep 3
+                    done
+
+                    if [ "$HEALTHY" -ne 1 ]; then
+                        docker logs logitrack-backend || true
+                        docker rm -f logitrack-backend || true
+                        docker rename "$OLD" logitrack-backend
+                        docker start logitrack-backend
+                        echo "Backend deployment failed. Previous backend restored."
+                        exit 1
+                    fi
+
+                    echo "Backend deployed successfully."
+                    echo "Previous backend retained as $OLD"
+                '''
+            }
+        }
+
+        stage('Deploy Frontend') {
+            steps {
+                sh '''
+                    set -eu
+
+                    OLD="logitrack-frontend-rollback-${BUILD_NUMBER}"
+                    docker rm -f "$OLD" 2>/dev/null || true
+
+                    docker rename logitrack-frontend "$OLD"
+                    docker stop "$OLD"
+
+                    if ! docker run -d \
+                        --name logitrack-frontend \
+                        -p 80:80 \
+                        --restart unless-stopped \
+                        ${FRONTEND_IMAGE}:${IMAGE_TAG}; then
+
+                        docker rename "$OLD" logitrack-frontend
+                        docker start logitrack-frontend
+                        exit 1
+                    fi
+
+                    HEALTHY=0
+
+                    for i in $(seq 1 20); do
+                        if curl -fsS http://127.0.0.1/ >/dev/null \
+                           && curl -fsS http://127.0.0.1/api/health >/dev/null; then
+                            HEALTHY=1
+                            break
+                        fi
+                        sleep 3
+                    done
+
+                    if [ "$HEALTHY" -ne 1 ]; then
+                        docker logs logitrack-frontend || true
+                        docker rm -f logitrack-frontend || true
+                        docker rename "$OLD" logitrack-frontend
+                        docker start logitrack-frontend
+                        echo "Frontend deployment failed. Previous frontend restored."
+                        exit 1
+                    fi
+
+                    echo "Frontend deployed successfully."
+                    echo "Previous frontend retained as $OLD"
+                '''
+            }
+        }
+
+        stage('Final Verification') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "Checking website..."
+                    curl -fsS http://localhost/ >/dev/null
+
+                    echo "Checking backend API..."
+                    curl -fsS http://localhost/api/health
+
+                    echo ""
+                    docker ps
+                    echo "Logitrack Pro deployment successful."
+                '''
             }
         }
     }
 
     post {
         success {
-            echo 'Logitrack Pro CI/CD image build and push completed!'
+            echo 'Logitrack Pro CI/CD pipeline completed successfully!'
         }
 
         failure {
-            echo 'Pipeline failed. Check the Jenkins console output.'
+            echo 'Pipeline failed. Check the Jenkins console output and container status.'
         }
     }
 }
