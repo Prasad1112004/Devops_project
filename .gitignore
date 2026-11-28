@@ -1,0 +1,22 @@
+# Terraform state and plans
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/*.plan
+**/*.tfvars
+!**/*.tfvars.example
+**/.terraform/
+
+# Secrets and environment files
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies and build output
+**/node_modules/
+**/dist/
+**/build/
+
+# Editor files
+.vscode/
+.idea/
