@@ -4,29 +4,86 @@ pipeline {
 
     options {
         disableConcurrentBuilds()
-        timestamps()
+        timeout(time: 40, unit: 'MINUTES')
+    }
+
+    environment {
+        FRONTEND_IMAGE = 'prasad1112004/logitrack-frontend'
+        BACKEND_IMAGE  = 'prasad1112004/logitrack-backend'
+
+        FRONTEND_TAG = 'v3'
+        BACKEND_TAG  = 'v2'
+
+        DOCKER_BUILDKIT = '1'
     }
 
     stages {
+
         stage('Checkout Verification') {
             steps {
-                echo 'Starting Logitrack Pro CI/CD Pipeline'
-                echo 'Source code is being checked out from GitHub.'
+                checkout scm
+                echo 'GitHub repository checked out successfully.'
             }
         }
 
         stage('Verify Project Structure') {
             steps {
-                dir('smart-logistics') {
+                sh '''
+                    test -f smart-logistics/frontend/package.json
+                    test -f smart-logistics/backend/package.json
+                    test -f smart-logistics/frontend/Dockerfile
+                    test -f smart-logistics/backend/Dockerfile
+
+                    echo "All required project files found."
+                '''
+            }
+        }
+
+        stage('Build Frontend Image') {
+            steps {
+                sh '''
+                    docker build \
+                      -t ${FRONTEND_IMAGE}:${FRONTEND_TAG} \
+                      -f smart-logistics/frontend/Dockerfile \
+                      smart-logistics/frontend
+                '''
+            }
+        }
+
+        stage('Build Backend Image') {
+            steps {
+                sh '''
+                    docker build \
+                      -t ${BACKEND_IMAGE}:${BACKEND_TAG} \
+                      -f smart-logistics/backend/Dockerfile \
+                      smart-logistics/backend
+                '''
+            }
+        }
+
+        stage('Push Images to Docker Hub') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DH_USERNAME',
+                        passwordVariable: 'DH_TOKEN'
+                    )
+                ]) {
                     sh '''
-                        echo "Checking project files..."
+                        set +x
+                        set -e
 
-                        test -f frontend/package.json
-                        test -f backend/package.json
-                        test -f frontend/Dockerfile
-                        test -f backend/Dockerfile
+                        trap 'docker logout >/dev/null 2>&1 || true' EXIT
 
-                        echo "All required project files found."
+                        echo "$DH_TOKEN" | docker login \
+                            --username "$DH_USERNAME" \
+                            --password-stdin
+
+                        docker push ${FRONTEND_IMAGE}:${FRONTEND_TAG}
+                        docker push ${BACKEND_IMAGE}:${BACKEND_TAG}
+
+                        echo "Both images pushed successfully."
                     '''
                 }
             }
@@ -35,10 +92,11 @@ pipeline {
 
     post {
         success {
-            echo 'Logitrack Pro pipeline completed successfully!'
+            echo 'Logitrack Pro CI/CD image build and push completed!'
         }
+
         failure {
-            echo 'Pipeline failed. Check the console output.'
+            echo 'Pipeline failed. Check the Jenkins console output.'
         }
     }
 }
