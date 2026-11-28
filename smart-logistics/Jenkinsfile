@@ -1,0 +1,44 @@
+
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    stages {
+        stage('Checkout Verification') {
+            steps {
+                echo 'Starting Logitrack Pro CI/CD Pipeline'
+                echo 'Source code is being checked out from GitHub.'
+            }
+        }
+
+        stage('Verify Project Structure') {
+            steps {
+                dir('smart-logistics') {
+                    sh '''
+                        echo "Checking project files..."
+
+                        test -f frontend/package.json
+                        test -f backend/package.json
+                        test -f frontend/Dockerfile
+                        test -f backend/Dockerfile
+
+                        echo "All required project files found."
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Logitrack Pro pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Check the console output.'
+        }
+    }
+}
