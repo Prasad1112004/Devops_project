@@ -1,9 +1,9 @@
 require('dotenv').config();
-const express     = require('express');
-const cors        = require('cors');
-const helmet      = require('helmet');
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
 const compression = require('compression');
-const rateLimit   = require('express-rate-limit');
+const rateLimit = require('express-rate-limit');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
@@ -11,9 +11,30 @@ const app = express();
 // ── Security & performance ────────────────────────────────────
 app.use(helmet());
 app.use(compression());
+const defaultAllowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173'
+];
+
+const configuredOrigins = (process.env.CLIENT_URL || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
+const allowedOrigins = new Set([
+  ...defaultAllowedOrigins,
+  ...configuredOrigins
+]);
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
-  credentials: true,
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.has(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
 }));
 app.use(express.json({ limit: '2mb' }));
 
@@ -23,11 +44,11 @@ app.use('/api/auth', rateLimit({
 }));
 
 // ── Routes ────────────────────────────────────────────────────
-app.use('/api/auth',      require('./routes/auth'));
-app.use('/api/orders',    require('./routes/orders'));
-app.use('/api/drivers',   require('./routes/drivers'));
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/orders', require('./routes/orders'));
+app.use('/api/drivers', require('./routes/drivers'));
 app.use('/api/dashboard', require('./routes/dashboard'));
-app.use('/api/routes',    require('./routes/routes'));
+app.use('/api/routes', require('./routes/routes'));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
