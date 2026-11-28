@@ -9,7 +9,7 @@ exports.stats = async (req, res, next) => {
         SUM(status = 'In Transit')                           AS in_transit,
         SUM(status = 'Out for Delivery')                     AS out_for_delivery,
         SUM(status = 'Delivered')                            AS delivered,
-        SUM(status = 'Delayed')                              AS delayed,
+        SUM(status = 'Delayed')                             AS \`delayed\`,
         SUM(status = 'Pending')                              AS pending,
         SUM(status = 'Cancelled')                            AS cancelled,
         SUM(status NOT IN ('Delivered','Cancelled'))         AS active

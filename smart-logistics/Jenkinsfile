@@ -12,7 +12,7 @@ pipeline {
         BACKEND_IMAGE  = 'prasad1112004/logitrack-backend'
 
         FRONTEND_TAG = 'v3'
-        BACKEND_TAG  = 'v2'
+        BACKEND_TAG  = 'v3'
 
         DOCKER_BUILDKIT = '1'
     }
